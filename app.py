@@ -1,73 +1,83 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
 
-# 1. 페이지 설정 및 제목
-st.set_page_config(page_title="⚽ 축구 분석 AI 챗봇", page_icon="⚽", layout="centered")
-st.title("⚽ 축구 분석 AI 챗봇")
-st.caption("전술, 경기 분석, 선수 스탯 등 축구에 대한 모든 것을 물어보세요!")
+# 페이지 설정
+st.set_page_config(page_title="공부 상담 챗봇", page_icon="📚", layout="centered")
 
-# 2. Streamlit Secrets에서 API 키 불러오기 및 설정
+# Streamlit Secrets에서 API 키 불러오기
 try:
-    # Streamlit Cloud 배포 환경 및 로컬 .streamlit/secrets.toml 대응
-    gemini_api_key = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=gemini_api_key)
+    api_key = st.secrets["GEMINI_API_KEY"]
+    client = genai.Client(api_key=api_key)
 except KeyError:
-    st.error("❌ API 키를 찾을 수 없습니다. Streamlit Secrets에 'GEMINI_API_KEY'를 설정해주세요.")
+    st.error("🔑 Streamlit Secrets에 'GEMINI_API_KEY'가 설정되지 않았습니다. .streamlit/secrets.toml 파일을 확인해주세요.")
     st.stop()
 
-# 3. 세션 상태(Session State)로 채팅 기록 초기화
+# 세션 상태(Chat History) 초기화
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 4. 기존 채팅 기록 화면에 출력
+# 앱 제목 및 설명
+st.title("📚 무엇이든 물어보세요! 공부 상담소")
+st.caption("공부 방법, 시간 관리, 슬럼프 극복 등 공부에 대한 고민을 나누어보세요.")
+
+# 기존 대화 기록 출력
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 5. 사용자 입력 받기
-if user_input := st.chat_input("예: 현대 축구에서 인버티드 풀백의 역할은 무엇인가요?"):
+# 사용자 입력 받기
+if user_input := st.chat_input("공부하면서 어떤 점이 가장 힘드신가요?"):
     
-    # 사용자 메시지 화면에 표시 및 세션에 저장
-    st.chat_message("user").markdown(user_input)
+    # 1. 사용자 메시지 화면에 표시 및 저장
+    with st.chat_message("user"):
+        st.markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
     
-    # 6. AI 답변 생성 및 오류 처리
+    # 2. 챗봇 답변 생성 및 오류 처리
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         
         try:
-            # gemini-2.5-flash-lite 모델 설정
-            # 축구 분석가로서의 전문성을 부여하기 위한 system_instruction 추가
-            model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash-lite",
-                system_instruction="당신은 전문적인 축구 분석가이자 전술가입니다. 사용자의 질문에 대해 데이터, 전술적 관점, 역사적 배경을 바탕으로 친절하고 깊이 있게 답변해주세요."
+            # 페르소나 부여를 위한 시스템 지침(System Instruction) 설정
+            system_instruction = (
+                "당신은 친절하고 전문적인 공부 상담 멘토입니다. "
+                "학생들의 학습 고민(시간 관리, 집중력, 과목별 공부법 등)을 경청하고, "
+                "공감해주며, 실질적이고 단계적인 해결책을 제시해주세요. "
+                "답변은 친근하고 격려하는 어조로 작성해주세요."
             )
             
-            # 대화 맥락을 유지하기 위해 기존 대화 기록을 포함하여 메시지 구성
-            # Gemini API 형식에 맞게 변환 (user -> user, assistant -> model)
-            history = []
-            for msg in st.session_state.messages[:-1]:  # 방금 넣은 user_input 제외한 이전 기록
+            # API 모델 호출용 메시지 구조 변환 (이전 대화 기록 포함)
+            contents = []
+            for msg in st.session_state.messages:
+                # SDK 구조에 맞게 user/model로 역할 매핑
                 role = "user" if msg["role"] == "user" else "model"
-                history.append({"role": role, "parts": [msg["content"]]})
+                contents.append(types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg["content"])]
+                ))
             
-            # 채팅 세션 시작
-            chat = model.start_chat(history=history)
+            # API 호출 (gemini-2.5-flash-lite 사용)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash-lite',
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.7,
+                )
+            )
             
-            # 답변 생성 (스트리밍 방식 적용으로 더 자연스러운 UI 제공)
-            full_response = ""
-            response = chat.send_message(user_input, stream=True)
+            # 결과 출력 및 저장
+            ai_response = response.text
+            message_placeholder.markdown(ai_response)
+            st.session_state.messages.append({"role": "assistant", "content": ai_response})
             
-            for chunk in response:
-                full_response += chunk.text
-                message_placeholder.markdown(full_response + "▌")
-                
-            message_placeholder.markdown(full_response)
-            
-            # AI 답변을 세션에 저장
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
-            
-        except genai.types.generation_types.BlockedPromptException:
-            st.error("⚠️ 안전 정책에 의해 답변을 생성할 수 없는 요청입니다.")
+        except APIError as e:
+            # Gemini API 관련 오류 처리
+            error_msg = f"❌ Gemini API 오류가 발생했습니다: {e.message}"
+            message_placeholder.error(error_msg)
         except Exception as e:
-            st.error(f"❌ 오류가 발생했습니다: {str(e)}")
-            st.info("API 키가 올바른지, 혹은 네트워크 상태를 확인해주세요.")
+            # 기타 일반 오류 처리
+            error_msg = f"⚠️ 알 수 없는 오류가 발생했습니다: {str(e)}"
+            message_placeholder.error(error_msg)
